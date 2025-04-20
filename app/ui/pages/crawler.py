@@ -14,19 +14,158 @@ from app.data.exporter import export_to_excel, export_to_csv, export_to_json
 from app.data.database import get_db_connector
 from app.config.database_config import get_database_config
 
-def show_captcha_message():
-    st.warning("""
-    ### ⚠️ Phát hiện CAPTCHA!
+def display_captcha_ui():
+    """Display a custom UI for captcha interaction"""
+    st.markdown("""
+    <style>
+    .captcha-container {
+        border: 2px solid #f0f0f0;
+        border-radius: 8px;
+        padding: 20px;
+        text-align: center;
+        background-color: #fffdee;
+    }
+    .captcha-icon {
+        font-size: 48px;
+        margin-bottom: 10px;
+    }
+    </style>
     
-    TikTok yêu cầu xác minh CAPTCHA. Vui lòng:
+    <div class="captcha-container">
+        <div class="captcha-icon">🔒</div>
+        <h2>Phát hiện bảo vệ CAPTCHA</h2>
+        <p>TikTok yêu cầu xác minh captcha để tiếp tục. Vui lòng làm theo các bước sau:</p>
+        <ol style="text-align: left;">
+            <li>Chuyển đến cửa sổ trình duyệt đã mở</li>
+            <li>Kéo thanh trượt để ghép hình</li>
+            <li>Sau khi hoàn thành, quay lại đây và nhấn nút bên dưới</li>
+        </ol>
+    </div>
+    """, unsafe_allow_html=True)
     
-    1. Giải CAPTCHA trong cửa sổ trình duyệt đã mở
-    2. Kéo thanh trượt để hoàn thành CAPTCHA
-    3. Sau khi hoàn thành, quá trình đăng nhập sẽ tự động tiếp tục
+    # Continue button
+    col1, col2, col3 = st.columns([1, 2, 1])
+    with col2:
+        if st.button("✅ Tôi đã giải xong CAPTCHA - Tiếp tục", use_container_width=True):
+            # Mark captcha as solved
+            if 'tiktok_crawler' in st.session_state and st.session_state['tiktok_crawler']:
+                crawler = st.session_state['tiktok_crawler']
+                if crawler.captcha_monitor:
+                    crawler.captcha_monitor.mark_solved()
+                    crawler.crawl_paused = False
+                    st.session_state['captcha_detected'] = False
+                    st.success("Đã xác nhận và tiếp tục quá trình crawl!")
+                    time.sleep(1)
+                    st.rerun()
+                    
+def ensure_database_setup(db_config):
+    """
+    Kiểm tra và đảm bảo database đã được thiết lập đúng
     
-    Hệ thống sẽ đợi tối đa 60 giây để bạn giải CAPTCHA.
-    """)
-
+    Args:
+        db_config (dict): Cấu hình database
+        
+    Returns:
+        bool: True nếu database đã thiết lập đúng, False nếu không
+    """
+    if not db_config.get("db_enabled", False):
+        return False
+        
+    try:
+        # Tạo kết nối
+        db = get_db_connector(db_config)
+        
+        # Kiểm tra kết nối
+        if not db.connect():
+            logger.error("Không thể kết nối đến PostgreSQL server")
+            return False
+            
+        # Tạo database
+        if not db.create_database():
+            logger.error("Không thể tạo database")
+            return False
+            
+        # Kết nối đến database
+        if not db.connect_to_database():
+            logger.error("Không thể kết nối đến database")
+            return False
+            
+        # Kiểm tra xem bảng videos đã tồn tại chưa
+        db.cursor.execute("""
+        SELECT EXISTS (
+            SELECT FROM information_schema.tables 
+            WHERE table_schema = 'public' 
+            AND table_name = 'videos'
+        )
+        """)
+        videos_exists = db.cursor.fetchone()[0]
+        
+        # Kiểm tra xem bảng comments đã tồn tại chưa
+        db.cursor.execute("""
+        SELECT EXISTS (
+            SELECT FROM information_schema.tables 
+            WHERE table_schema = 'public' 
+            AND table_name = 'comments'
+        )
+        """)
+        comments_exists = db.cursor.fetchone()[0]
+        
+        # Nếu một trong hai bảng không tồn tại, tạo lại cả hai
+        if not videos_exists or not comments_exists:
+            # Tạo bảng videos
+            db.cursor.execute("""
+            CREATE TABLE IF NOT EXISTS videos (
+                video_id VARCHAR(255) PRIMARY KEY,
+                video_url TEXT NOT NULL,
+                author VARCHAR(255),
+                title TEXT,
+                description TEXT,
+                views_count BIGINT,
+                likes_count BIGINT,
+                shares_count BIGINT,
+                comments_count BIGINT,
+                post_time VARCHAR(255),
+                music_name TEXT,
+                tags TEXT[],
+                crawled_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+            """)
+            
+            # Tạo bảng comments
+            db.cursor.execute("""
+            CREATE TABLE IF NOT EXISTS comments (
+                comment_id SERIAL PRIMARY KEY,
+                video_id VARCHAR(255) REFERENCES videos(video_id) ON DELETE CASCADE,
+                username VARCHAR(255) NOT NULL,
+                comment_text TEXT,
+                likes INTEGER DEFAULT 0,
+                comment_time VARCHAR(255),
+                replies_count INTEGER DEFAULT 0,
+                is_reply BOOLEAN DEFAULT FALSE,
+                parent_comment_id INTEGER,
+                avatar_url TEXT,
+                avatar_path TEXT,
+                crawled_at TIMESTAMP
+            )
+            """)
+            
+            # Tạo các chỉ mục
+            db.cursor.execute("""
+            CREATE INDEX IF NOT EXISTS idx_comments_video_id ON comments(video_id);
+            CREATE INDEX IF NOT EXISTS idx_comments_username ON comments(username);
+            """)
+            
+            # Commit các thay đổi
+            db.conn.commit()
+            logger.info("Đã tạo các bảng cần thiết trong database")
+            
+        db.close()
+        return True
+        
+    except Exception as e:
+        logger.error(f"Lỗi khi thiết lập database: {e}")
+        return False
+    
 def filter_duplicate_comments(comments_data: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
     """
     Lọc bỏ các bình luận trùng lặp
@@ -60,6 +199,13 @@ def render_crawler_page():
     db_config = get_database_config()
     db_enabled = db_config.get("db_enabled", False)
     auto_save_to_db = db_config.get("auto_save_to_db", False)
+    
+    # Kiểm tra và thiết lập database nếu cần
+    if db_enabled:
+        db_status = ensure_database_setup(db_config)
+        if not db_status:
+            st.warning("Database chưa được thiết lập đúng cách. Vui lòng kiểm tra lại cài đặt Database trong trang Settings.")
+
     
     # Khởi tạo biến session state để lưu trữ crawler và trạng thái
     if 'tiktok_crawler' not in st.session_state:
@@ -115,7 +261,7 @@ def render_crawler_page():
                     
                     # Tạo crawler mới
                     crawler = TikTokCommentCrawler(headless=headless)
-                    crawler.captcha_callback = show_captcha_message
+                    crawler.captcha_callback = display_captcha_ui
 
                     login_progress.progress(30)
                     login_status.info("Đang tiến hành đăng nhập...")
@@ -239,6 +385,14 @@ def render_crawler_page():
                 
                 # Nút kết thúc
                 end_session_button = st.form_submit_button(label="Kết thúc phiên", type="secondary")
+                
+            if 'captcha_detected' not in st.session_state:
+                st.session_state['captcha_detected'] = False
+
+            # Define captcha callback
+            def handle_captcha_detected():
+                st.session_state['captcha_detected'] = True
+    
             if submit_button:
                 if not validate_tiktok_url(tiktok_url):
                     st.error("URL không hợp lệ. Vui lòng nhập URL TikTok hợp lệ.")
@@ -253,6 +407,14 @@ def render_crawler_page():
                     st.rerun()
                     return
                 
+                # Set up captcha callback
+                crawler.captcha_callback = handle_captcha_detected
+                
+                # Check if captcha was detected
+                if st.session_state['captcha_detected']:
+                    display_captcha_ui()
+                    return
+    
                 # Tạo thư mục data nếu chưa tồn tại
                 data_dir = Path("data/raw")
                 data_dir.mkdir(parents=True, exist_ok=True)
@@ -294,16 +456,19 @@ def render_crawler_page():
                         scroll_pause_time=scroll_pause_time,
                         unlimited=unlimited_crawl,
                         max_idle_time=max_idle_time if unlimited_crawl else 20,
+                        include_replies=include_replies,  # Pass the include_replies parameter
                         progress_callback=update_progress
                     )
+
                     
                     # Trích xuất comments
                     update_progress(80, "Đang trích xuất dữ liệu bình luận...")
                     comments_data = crawler.extract_comments(
                         max_comments=max_comments,
-                        include_replies=include_replies
+                        include_replies=include_replies,
+                        skip_unknown=True  # Skip comments with "Unknown" username
                     )
-                    
+
                     comments_data = filter_duplicate_comments(comments_data)
                     
                     if not comments_data:
@@ -397,6 +562,7 @@ def render_crawler_page():
                     else:
                         st.error("Không thể lưu dữ liệu bình luận.")
                         
+                    st.session_state['captcha_detected'] = False
                 except Exception as e:
                     st.error(f"Đã xảy ra lỗi: {str(e)}")
         

@@ -25,7 +25,7 @@ logger = setup_logger(__name__)
 
 class TikTokCommentCrawler:
     def __init__(self, headless: bool = False, chromedriver_path: Optional[str] = None,
-                 timeout: int = 10, user_agent: Optional[str] = None):
+             timeout: int = 10, user_agent: Optional[str] = None):
         """
         Khởi tạo trình crawl comments TikTok
         
@@ -39,6 +39,43 @@ class TikTokCommentCrawler:
         self.wait = None
         self.timeout = timeout
         self._setup_driver(headless, chromedriver_path, user_agent)
+        
+        # Thêm captcha monitor
+        self.captcha_monitor = CaptchaMonitor(self.driver, self.on_captcha_detected)
+        self.captcha_monitor.start()
+        
+        # Biến để kiểm soát quá trình crawl
+        self.crawl_paused = False
+        self.captcha_callback = None
+        
+    def on_captcha_detected(self, captcha_element):
+        """
+        Xử lý khi captcha được phát hiện
+        
+        Args:
+            captcha_element: Phần tử captcha
+        """
+        logger.warning("Đã phát hiện captcha! Tạm dừng quá trình crawl.")
+        self.crawl_paused = True
+        
+        # Gọi callback nếu có
+        if self.captcha_callback and callable(self.captcha_callback):
+            self.captcha_callback()
+
+    def wait_for_captcha_solution(self, timeout=300):
+        """
+        Đợi cho đến khi captcha được giải
+        
+        Args:
+            timeout: Thời gian tối đa đợi (giây)
+            
+        Returns:
+            bool: True nếu captcha đã được giải, False nếu hết thời gian
+        """
+        result = self.captcha_monitor.wait_for_solution(timeout)
+        if result:
+            self.crawl_paused = False
+        return result
         
     def _setup_driver(self, headless: bool, chromedriver_path: Optional[str], user_agent: Optional[str]):
         """Thiết lập trình duyệt Selenium"""
@@ -443,6 +480,12 @@ class TikTokCommentCrawler:
             max_attempts = 10
             
             while videos_loaded < max_videos and attempts < max_attempts:
+                # Kiểm tra xem quá trình có bị tạm dừng không (do captcha)
+                if self.crawl_paused:
+                    # Đợi cho đến khi captcha được giải
+                    time.sleep(1.0)
+                    continue
+                    
                 # Lấy danh sách các video hiện tại
                 video_elements = self.driver.find_elements(By.XPATH, "//div[@data-e2e='search_video-item']")
                 videos_loaded = len(video_elements)
@@ -565,10 +608,11 @@ class TikTokCommentCrawler:
 
     
     def load_all_comments(self, max_comments: int = 100, 
-                      scroll_pause_time: float = 1.5,
-                      unlimited: bool = False,
-                      max_idle_time: int = 20,
-                      progress_callback = None) -> bool:
+                     scroll_pause_time: float = 1.5,
+                     unlimited: bool = False,
+                     max_idle_time: int = 20,
+                     include_replies: bool = True,
+                     progress_callback = None) -> bool:
         """
         Cuộn trang để tải tất cả comments
         
@@ -577,6 +621,7 @@ class TikTokCommentCrawler:
             scroll_pause_time (float): Thời gian dừng giữa các lần cuộn (giây)
             unlimited (bool): Tải không giới hạn comments cho đến khi không thể tải thêm
             max_idle_time (int): Thời gian tối đa (giây) không thấy comments mới trước khi dừng (khi unlimited=True)
+            include_replies (bool): Có thu thập cả câu trả lời hay không
             progress_callback (callable): Hàm callback để cập nhật tiến trình
             
         Returns:
@@ -591,11 +636,23 @@ class TikTokCommentCrawler:
             # Cuộn xuống để tải thêm comments
             comments_loaded = 0
             last_comments_count = 0
+            max_comments_seen = 0
+            no_improvement_count = 0
+            max_no_improvement = 5
             attempts = 0
-            max_attempts = 20  # Số lần thử tối đa khi không có thêm comments mới
+            max_attempts = 20
             start_time = time.time()
             
-            while (unlimited or comments_loaded < max_comments) and attempts < max_attempts:
+            while (unlimited or comments_loaded < max_comments) and attempts < max_attempts and no_improvement_count < max_no_improvement:
+                # Kiểm tra xem quá trình có bị tạm dừng không (do captcha)
+                if self.crawl_paused:
+                    if progress_callback and callable(progress_callback):
+                        progress_callback(min(99, int((comments_loaded / max_comments) * 100)), 
+                                        "Đã tạm dừng do phát hiện captcha. Vui lòng giải captcha để tiếp tục.")
+                    
+                    # Đợi cho đến khi captcha được giải
+                    time.sleep(1.0)
+                    continue
                 # Đếm số lượng comments hiện tại
                 comments = self.driver.find_elements(By.XPATH, "//div[contains(@class, 'DivCommentItemWrapper')]")
                 comments_loaded = len(comments)
@@ -612,6 +669,14 @@ class TikTokCommentCrawler:
                         progress_percent = min(100, int((comments_loaded / max_comments) * 100))
                         progress_callback(progress_percent, f"Đã tải {comments_loaded}/{max_comments} comments")
                 
+                # Kiểm tra cải thiện số lượng comments
+                if comments_loaded > max_comments_seen:
+                    max_comments_seen = comments_loaded
+                    no_improvement_count = 0  # Reset bộ đếm không cải thiện
+                else:
+                    no_improvement_count += 1
+                    logger.info(f"Không cải thiện lần thứ {no_improvement_count}/{max_no_improvement}")
+                
                 if comments_loaded == last_comments_count:
                     attempts += 1
                     # Trong chế độ không giới hạn, kiểm tra thời gian trôi qua kể từ lần cuối có comments mới
@@ -624,6 +689,15 @@ class TikTokCommentCrawler:
                     
                 last_comments_count = comments_loaded
                 
+                # Nếu thu thập cả câu trả lời, mở tất cả các reply trước khi cuộn tiếp
+                if include_replies:
+                    reply_buttons_opened = self._open_all_replies()
+                    if reply_buttons_opened:
+                        # Nếu đã mở các nút reply, reset bộ đếm không cải thiện
+                        # vì có thể sẽ thấy thêm comments sau khi mở replies
+                        no_improvement_count = 0
+                        continue  # Bỏ qua cuộn xuống để đảm bảo tất cả replies đã được tải
+                
                 # Cuộn đến comment cuối cùng
                 if comments_loaded > 0:
                     last_comment = comments[-1]
@@ -631,10 +705,9 @@ class TikTokCommentCrawler:
                     
                 # Hoặc cuộn phần tử comments container
                 self.driver.execute_script("arguments[0].scrollTop = arguments[0].scrollHeight", comments_section)
-                time.sleep(scroll_pause_time)
                 
-                # Tự động mở tất cả các view replies
-                self._open_all_replies()
+                # Đợi lâu hơn để trang tải
+                time.sleep(scroll_pause_time * 1.5)  # Tăng thời gian chờ để đảm bảo trang tải đầy đủ
                 
                 # Kiểm tra nếu đã đạt đủ số lượng comments cần thiết (chỉ trong chế độ có giới hạn)
                 if not unlimited and comments_loaded >= max_comments:
@@ -644,6 +717,11 @@ class TikTokCommentCrawler:
                 # Kiểm tra nếu không tải được thêm comments
                 if attempts >= max_attempts:
                     logger.info(f"Không thể tải thêm comments sau {max_attempts} lần thử")
+                    break
+                
+                # Kiểm tra nếu không cải thiện số lượng comments
+                if no_improvement_count >= max_no_improvement:
+                    logger.info(f"Dừng tải sau {max_no_improvement} lần scroll không cải thiện số lượng comments")
                     break
             
             # Hoàn thành tiến trình
@@ -657,9 +735,12 @@ class TikTokCommentCrawler:
                 progress_callback(0, f"Lỗi: {str(e)}")
             return False
 
-    def _open_all_replies(self):
+    def _open_all_replies(self) -> bool:
         """
         Mở tất cả các replies
+        
+        Returns:
+            bool: True nếu đã mở ít nhất một nút reply, False nếu không có nút nào được mở
         """
         try:
             # Tìm tất cả các nút "Xem X câu trả lời"
@@ -668,19 +749,30 @@ class TikTokCommentCrawler:
                 "//div[contains(@class, 'DivViewRepliesContainer')]"
             )
             
+            opened_count = 0
+            
             if view_replies_buttons:
                 logger.info(f"Tìm thấy {len(view_replies_buttons)} nút xem replies")
                 
                 # Click tất cả các nút
                 for btn in view_replies_buttons:
                     try:
+                        # Kiểm tra nếu nút thực sự hiển thị (không bị ẩn)
+                        if not btn.is_displayed():
+                            continue
+                            
                         # Cuộn đến nút reply
                         self.driver.execute_script("arguments[0].scrollIntoView({block: 'center'});", btn)
-                        time.sleep(0.3)  # Đợi một chút để nút hiển thị trong view
+                        time.sleep(0.5)  # Đợi lâu hơn để nút hiển thị trong view
+                        
+                        # Check lại xem nút có hiển thị không sau khi scroll
+                        if not btn.is_displayed():
+                            continue
                         
                         # Click vào nút
                         self.driver.execute_script("arguments[0].click();", btn)
-                        time.sleep(0.5)  # Đợi replies tải
+                        opened_count += 1
+                        time.sleep(1.0)  # Đợi lâu hơn để replies tải
                         
                         logger.info("Đã mở một replies container")
                     except Exception as e:
@@ -688,7 +780,8 @@ class TikTokCommentCrawler:
                         continue
                 
                 # Đợi một chút để tất cả replies được tải
-                time.sleep(1)
+                if opened_count > 0:
+                    time.sleep(2.0)
                 
                 # Kiểm tra xem còn nút nào nữa không
                 remaining = self.driver.find_elements(
@@ -697,9 +790,12 @@ class TikTokCommentCrawler:
                 )
                 if remaining:
                     logger.info(f"Còn {len(remaining)} nút xem replies chưa được click")
+            
+            return opened_count > 0
                     
         except Exception as e:
             logger.warning(f"Lỗi khi mở tất cả các replies: {e}")
+            return False
 
     def download_avatars(self, comments_data: List[Dict[str, Any]]) -> None:
         """
@@ -1115,9 +1211,14 @@ class TikTokCommentCrawler:
     
     def close(self):
         """Đóng trình duyệt"""
+        # Dừng captcha monitor trước khi đóng trình duyệt
+        if hasattr(self, 'captcha_monitor'):
+            self.captcha_monitor.stop()
+            
         if self.driver:
             self.driver.quit()
             logger.info("Đã đóng trình duyệt")
+
 
 def main():
     """Hàm chính khi chạy như một module độc lập"""

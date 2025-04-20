@@ -354,11 +354,11 @@ class PostgresConnector:
             return False
 
     def insert_video_with_details(self, video_id: str, video_url: str, 
-                            author: str = None, title: str = None,
-                            description: str = None, views_count: int = None,
-                            likes_count: int = None, shares_count: int = None,
-                            comments_count: int = None, post_time: str = None,
-                            music_name: str = None, tags: List[str] = None) -> bool:
+                        author: str = None, title: str = None,
+                        description: str = None, views_count: int = None,
+                        likes_count: int = None, shares_count: int = None,
+                        comments_count: int = None, post_time: str = None,
+                        music_name: str = None, tags: List[str] = None) -> bool:
         """
         Thêm hoặc cập nhật thông tin chi tiết video
         
@@ -380,6 +380,20 @@ class PostgresConnector:
             bool: True nếu thêm/cập nhật thành công, False nếu thất bại
         """
         try:
+            # Kiểm tra xem bảng videos có tồn tại không
+            self.cursor.execute("""
+            SELECT EXISTS (
+                SELECT FROM information_schema.tables 
+                WHERE table_schema = 'public' 
+                AND table_name = 'videos'
+            )
+            """)
+            table_exists = self.cursor.fetchone()[0]
+            
+            if not table_exists:
+                logger.error("Bảng videos không tồn tại. Hãy thiết lập database trước.")
+                return False
+            
             # Kiểm tra xem video đã tồn tại chưa
             self.cursor.execute("SELECT 1 FROM videos WHERE video_id = %s", (video_id,))
             exists = self.cursor.fetchone()
@@ -394,16 +408,16 @@ class PostgresConnector:
                 self.cursor.execute("""
                 UPDATE videos SET 
                     video_url = %s,
-                    author = %s,
-                    title = %s,
-                    description = %s,
-                    views_count = %s,
-                    likes_count = %s,
-                    shares_count = %s,
-                    comments_count = %s,
-                    post_time = %s,
-                    music_name = %s,
-                    tags = %s,
+                    author = COALESCE(%s, author),
+                    title = COALESCE(%s, title),
+                    description = COALESCE(%s, description),
+                    views_count = COALESCE(%s, views_count),
+                    likes_count = COALESCE(%s, likes_count),
+                    shares_count = COALESCE(%s, shares_count),
+                    comments_count = COALESCE(%s, comments_count),
+                    post_time = COALESCE(%s, post_time),
+                    music_name = COALESCE(%s, music_name),
+                    tags = COALESCE(%s, tags),
                     crawled_at = CURRENT_TIMESTAMP
                 WHERE video_id = %s
                 """, (
@@ -427,10 +441,14 @@ class PostgresConnector:
                     post_time, music_name, tags_array
                 ))
                 logger.info(f"Đã thêm video mới với thông tin chi tiết: {video_id}")
+            
+            # Commit thay đổi
+            self.conn.commit()
                 
             return True
         except Exception as e:
             logger.error(f"Lỗi khi thêm/cập nhật thông tin chi tiết video: {e}")
+            self.conn.rollback()  # Rollback nếu có lỗi
             return False
         
     def export_dataframe_to_postgres(self, df: pd.DataFrame, video_id: str, video_url: str, video_info: Dict[str, Any] = None) -> bool:
@@ -655,30 +673,72 @@ def setup_database(config: Dict[str, Any] = None) -> bool:
     Returns:
         bool: True nếu thiết lập thành công, False nếu thất bại
     """
-    from app.config.db_init import init_database_schema
-    
     db = get_db_connector(config)
     
     try:
         # Kết nối đến PostgreSQL server
         if not db.connect():
+            logger.error("Không thể kết nối đến PostgreSQL server")
             return False
         
         # Tạo database nếu chưa tồn tại
         if not db.create_database():
+            logger.error("Không thể tạo database")
             return False
         
         # Kết nối đến database cụ thể
         if not db.connect_to_database():
+            logger.error("Không thể kết nối đến database cụ thể")
             return False
         
-        # Khởi tạo schema từ script SQL
-        if not init_database_schema():
-            # Thử tạo bảng bằng cách thông thường nếu script SQL thất bại
-            if not db.create_tables():
-                return False
+        # Tạo các bảng cần thiết
+        db.cursor.execute("""
+        CREATE TABLE IF NOT EXISTS videos (
+            video_id VARCHAR(255) PRIMARY KEY,
+            video_url TEXT NOT NULL,
+            author VARCHAR(255),
+            title TEXT,
+            description TEXT,
+            views_count BIGINT,
+            likes_count BIGINT,
+            shares_count BIGINT,
+            comments_count BIGINT,
+            post_time VARCHAR(255),
+            music_name TEXT,
+            tags TEXT[],
+            crawled_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )
+        """)
         
+        db.cursor.execute("""
+        CREATE TABLE IF NOT EXISTS comments (
+            comment_id SERIAL PRIMARY KEY,
+            video_id VARCHAR(255) REFERENCES videos(video_id) ON DELETE CASCADE,
+            username VARCHAR(255) NOT NULL,
+            comment_text TEXT,
+            likes INTEGER DEFAULT 0,
+            comment_time VARCHAR(255),
+            replies_count INTEGER DEFAULT 0,
+            is_reply BOOLEAN DEFAULT FALSE,
+            parent_comment_id INTEGER,
+            avatar_url TEXT,
+            avatar_path TEXT,
+            crawled_at TIMESTAMP
+        )
+        """)
+        
+        # Tạo các chỉ mục
+        db.cursor.execute("""
+        CREATE INDEX IF NOT EXISTS idx_comments_video_id ON comments(video_id);
+        CREATE INDEX IF NOT EXISTS idx_comments_username ON comments(username);
+        """)
+        
+        # Commit các thay đổi
+        db.conn.commit()
+        
+        logger.info("Đã thiết lập database thành công")
         return True
+        
     except Exception as e:
         logger.error(f"Lỗi khi thiết lập database: {e}")
         return False
