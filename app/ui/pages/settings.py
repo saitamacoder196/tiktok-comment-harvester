@@ -198,28 +198,31 @@ def render_settings_page():
         
         if db_enabled:
             col1, col2 = st.columns(2)
-            
+    
             with col1:
-                # Host
-                db_host = st.text_input(
-                    "Host",
-                    value=db_config.get("db_host", "localhost"),
-                    help="Địa chỉ máy chủ PostgreSQL"
-                )
-                
-                # User
-                db_user = st.text_input(
-                    "Tên người dùng",
-                    value=db_config.get("db_user", "postgres"),
-                    help="Tên người dùng PostgreSQL"
-                )
-                
-                # Database name
-                db_name = st.text_input(
-                    "Tên database",
-                    value=db_config.get("db_name", "tiktok_data"),
-                    help="Tên database sẽ được tạo hoặc kết nối"
-                )
+                if st.button("🛠️ Thiết lập database", use_container_width=False):
+                    with st.spinner("Đang thiết lập database..."):
+                        # Thiết lập database
+                        if setup_database({
+                            "db_host": db_host,
+                            "db_port": db_port,
+                            "db_user": db_user,
+                            "db_password": db_password,
+                            "db_name": db_name
+                        }):
+                            st.success("✅ Đã thiết lập database thành công!")
+                        else:
+                            st.error("❌ Không thể thiết lập database!")
+            
+            with col2:
+                if st.button("📄 Khởi tạo schema từ script SQL", use_container_width=False):
+                    with st.spinner("Đang khởi tạo schema database..."):
+                        from app.config.db_init import init_database_schema
+                        
+                        if init_database_schema():
+                            st.success("✅ Đã khởi tạo schema database thành công!")
+                        else:
+                            st.error("❌ Không thể khởi tạo schema database!")
             
             with col2:
                 # Port

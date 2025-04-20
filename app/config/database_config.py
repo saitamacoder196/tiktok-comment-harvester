@@ -1,6 +1,8 @@
+# app/config/database_config.py
 import json
 from pathlib import Path
 import os
+from app.config.env_config import load_env_config
 
 def get_database_config():
     """
@@ -15,14 +17,17 @@ def get_database_config():
     # Đảm bảo thư mục cấu hình tồn tại
     config_dir.mkdir(parents=True, exist_ok=True)
     
+    # Tải cấu hình từ file .env
+    env_config = load_env_config()
+    
     # Mặc định config
     default_config = {
         "db_enabled": False,
-        "db_host": "localhost",
-        "db_port": 5432,
-        "db_user": "postgres",
-        "db_password": "",
-        "db_name": "tiktok_data",
+        "db_host": env_config.get("db_host", "localhost"),
+        "db_port": env_config.get("db_port", 5432),
+        "db_user": env_config.get("db_user", "postgres"),
+        "db_password": env_config.get("db_password", ""),
+        "db_name": env_config.get("db_name", "tiktok_data"),
         "auto_save_to_db": False
     }
     
@@ -40,6 +45,11 @@ def get_database_config():
                     # Lưu cấu hình mới
                     with open(config_file, 'w', encoding='utf-8') as fw:
                         json.dump(config, fw, indent=4, ensure_ascii=False)
+                
+                # Ưu tiên sử dụng giá trị từ .env nếu có
+                for key in ["db_host", "db_port", "db_user", "db_password", "db_name"]:
+                    if env_config.get(key.replace("db_", "")) is not None:
+                        config[key] = env_config.get(key.replace("db_", ""))
                 
                 return {
                     "db_enabled": config.get("db_enabled", default_config["db_enabled"]),

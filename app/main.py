@@ -16,6 +16,14 @@ from app.ui.pages.data_view import render_data_view_page
 from app.ui.pages.settings import render_settings_page
 from app.ui.pages.database_view import render_database_view_page
 
+import sys
+from pathlib import Path
+
+# Add the project root to the Python path
+project_root = Path(__file__).parent.parent  # Adjust if needed
+if str(project_root) not in sys.path:
+    sys.path.insert(0, str(project_root))
+    
 # Thiết lập cấu hình Streamlit
 st.set_page_config(
     page_title="TikTok Comment Harvester",

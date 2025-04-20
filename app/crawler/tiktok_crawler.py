@@ -1,3 +1,4 @@
+import re
 import time
 import csv
 import json
@@ -6,6 +7,7 @@ import logging
 from pathlib import Path
 from datetime import datetime
 from typing import List, Dict, Any, Optional, Union
+from urllib.parse import quote
 
 from selenium import webdriver
 from selenium.webdriver.chrome.service import Service
@@ -16,7 +18,7 @@ from selenium.webdriver.support import expected_conditions as EC
 from selenium.common.exceptions import TimeoutException, NoSuchElementException
 from webdriver_manager.chrome import ChromeDriverManager
 
-from app.utils.helpers import validate_tiktok_url, setup_logger
+from app.utils.helpers import get_video_id_from_url, validate_tiktok_url, setup_logger
 from app.crawler.selectors import COMMENT_SELECTORS
 
 logger = setup_logger(__name__)
@@ -71,6 +73,103 @@ class TikTokCommentCrawler:
             logger.error(f"Lỗi khi khởi tạo trình duyệt: {e}")
             raise
         
+    def extract_video_info(self, video_url: str) -> Dict[str, Any]:
+        """
+        Trích xuất thông tin video từ trang video TikTok
+        
+        Args:
+            video_url (str): URL của video TikTok
+            
+        Returns:
+            dict: Thông tin video đã trích xuất
+        """
+        try:
+            # Mở trang video nếu chưa mở
+            if self.driver.current_url != video_url:
+                self.navigate_to_video(video_url)
+            
+            # Đợi trang tải xong
+            time.sleep(2)
+            
+            video_info = {
+                "video_id": get_video_id_from_url(video_url),
+                "video_url": video_url,
+                "author": "Unknown",
+                "description": "",
+                "tags": [],
+                "post_time": "",
+                "music": "",
+                "related_videos": []
+            }
+            
+            # Trích xuất tên tác giả
+            try:
+                author_element = self.driver.find_element(By.XPATH, "//div[contains(@class, 'DivCreatorInfoContainer')]//a")
+                video_info["author"] = author_element.text
+            except NoSuchElementException:
+                pass
+            
+            # Trích xuất mô tả
+            try:
+                desc_element = self.driver.find_element(By.XPATH, "//div[contains(@class, 'DivDescriptionContentContainer')]")
+                video_info["description"] = desc_element.text
+            except NoSuchElementException:
+                pass
+            
+            # Trích xuất hashtags
+            try:
+                tag_elements = self.driver.find_elements(By.XPATH, "//a[contains(@href, '/tag/')]")
+                video_info["tags"] = [tag.text.replace('#', '') for tag in tag_elements]
+            except NoSuchElementException:
+                pass
+            
+            # Trích xuất thời gian đăng
+            try:
+                time_element = self.driver.find_element(By.XPATH, "//span[contains(@class, 'TUXText--weight-medium') and contains(text(), 'trước')]")
+                video_info["post_time"] = time_element.text
+            except NoSuchElementException:
+                pass
+            
+            # Trích xuất thông tin nhạc
+            try:
+                music_element = self.driver.find_element(By.XPATH, "//h4[contains(@class, 'music-title')]")
+                video_info["music"] = music_element.text
+            except NoSuchElementException:
+                pass
+            
+            # Trích xuất video liên quan (nếu có)
+            try:
+                # Tìm tab "Video có liên quan"
+                related_tab = self.driver.find_element(By.XPATH, "//div[contains(text(), 'Video có liên quan')]")
+                related_tab.click()
+                
+                # Đợi videos liên quan tải
+                time.sleep(1)
+                
+                # Lấy danh sách videos
+                related_videos = self.driver.find_elements(By.XPATH, "//div[contains(@class, 'DivItemContainer')]//a")
+                
+                # Lấy URLs
+                for video in related_videos[:5]:  # Lấy tối đa 5 video liên quan
+                    try:
+                        href = video.get_attribute("href")
+                        if href and "video" in href:
+                            video_info["related_videos"].append(href)
+                    except:
+                        continue
+            except NoSuchElementException:
+                pass
+            
+            return video_info
+        
+        except Exception as e:
+            logger.error(f"Lỗi khi trích xuất thông tin video: {e}")
+            return {
+                "video_id": get_video_id_from_url(video_url),
+                "video_url": video_url,
+                "error": str(e)
+            }
+
     def login_to_tiktok(self, username, password, max_wait=30):
         """
         Đăng nhập vào TikTok bằng username/email và password
@@ -84,7 +183,7 @@ class TikTokCommentCrawler:
             bool: True nếu đăng nhập thành công, False nếu thất bại
         """
         try:
-            # Truy cập trang đăng nhập TikTok
+            # Truy cập trang đăng nhập TikTok với ngôn ngữ tiếng Anh
             self.driver.get("https://www.tiktok.com/login?lang=en")
             logger.info("Đã mở trang đăng nhập TikTok")
             
@@ -161,12 +260,39 @@ class TikTokCommentCrawler:
                     
                 # Kiểm tra nếu có yêu cầu captcha
                 try:
-                    captcha_container = self.driver.find_element(By.XPATH, "//div[contains(@class, 'captcha_container')]")
+                    # Kiểm tra captcha slider
+                    captcha_container = self.driver.find_element(By.ID, "captcha-verify-container-main-page")
                     if captcha_container.is_displayed():
                         logger.warning("Phát hiện Captcha. Vui lòng giải quyết captcha thủ công.")
+                        
+                        # Hiển thị thông báo cho người dùng (nếu được gọi từ streamlit)
+                        if hasattr(self, 'captcha_callback') and callable(self.captcha_callback):
+                            self.captcha_callback()
+                        
                         # Đợi người dùng giải captcha
-                        time.sleep(15)  # Thời gian để người dùng giải captcha
-                except:
+                        captcha_solved = False
+                        captcha_wait_start = time.time()
+                        max_captcha_wait = 60  # Tối đa 60 giây để giải captcha
+                        
+                        while time.time() - captcha_wait_start < max_captcha_wait:
+                            try:
+                                # Kiểm tra xem captcha còn hiển thị không
+                                captcha_container = self.driver.find_element(By.ID, "captcha-verify-container-main-page")
+                                if not captcha_container.is_displayed():
+                                    captcha_solved = True
+                                    break
+                            except NoSuchElementException:
+                                captcha_solved = True
+                                break
+                            
+                            time.sleep(3)  # Kiểm tra mỗi 3 giây
+                        
+                        if captcha_solved:
+                            logger.info("Captcha đã được giải quyết.")
+                        else:
+                            logger.warning("Hết thời gian chờ giải captcha.")
+                except NoSuchElementException:
+                    # Không tìm thấy captcha
                     pass
                     
                 time.sleep(1)
@@ -286,6 +412,109 @@ class TikTokCommentCrawler:
             logger.error(f"Lỗi khi mở trang video: {e}")
             return False
     
+    def search_tiktok(self, keyword: str, max_videos: int = 10):
+        """
+        Tìm kiếm video TikTok theo từ khóa
+        
+        Args:
+            keyword (str): Từ khóa tìm kiếm
+            max_videos (int): Số lượng video tối đa cần lấy
+        
+        Returns:
+            list: Danh sách thông tin các video tìm thấy
+        """
+        try:
+            # Mã hóa từ khóa tìm kiếm
+            keyword_encoded = quote(keyword)
+            
+            # Truy cập trang tìm kiếm của TikTok
+            search_url = f"https://www.tiktok.com/search?q={keyword_encoded}"
+            self.driver.get(search_url)
+            
+            # Đợi cho các video tải
+            self.wait.until(EC.presence_of_element_located(
+                (By.XPATH, "//div[@data-e2e='search_video-item']")
+            ))
+            
+            # Cuộn trang để tải thêm video
+            videos_loaded = 0
+            last_videos_count = 0
+            attempts = 0
+            max_attempts = 10
+            
+            while videos_loaded < max_videos and attempts < max_attempts:
+                # Lấy danh sách các video hiện tại
+                video_elements = self.driver.find_elements(By.XPATH, "//div[@data-e2e='search_video-item']")
+                videos_loaded = len(video_elements)
+                
+                if videos_loaded == last_videos_count:
+                    attempts += 1
+                else:
+                    attempts = 0
+                    
+                last_videos_count = videos_loaded
+                
+                # Cuộn trang để tải thêm video
+                self.driver.execute_script("window.scrollTo(0, document.body.scrollHeight);")
+                time.sleep(1.5)
+                
+                if videos_loaded >= max_videos:
+                    break
+            
+            # Lấy thông tin các video
+            video_elements = self.driver.find_elements(By.XPATH, "//div[@data-e2e='search_video-item']")[:max_videos]
+            videos_data = []
+            
+            for element in video_elements:
+                try:
+                    # Lấy link video
+                    link_element = element.find_element(By.XPATH, ".//a")
+                    video_url = link_element.get_attribute("href")
+                    
+                    # Lấy ID video từ URL
+                    video_id = get_video_id_from_url(video_url)
+                    
+                    # Lấy tên tác giả
+                    try:
+                        author_element = element.find_element(By.XPATH, ".//a[@data-e2e='search-username']")
+                        author = author_element.text
+                    except NoSuchElementException:
+                        author = "Unknown"
+                    
+                    # Lấy tiêu đề hoặc mô tả
+                    try:
+                        desc_element = element.find_element(By.XPATH, ".//div[@data-e2e='search-card-desc']")
+                        description = desc_element.text
+                    except NoSuchElementException:
+                        description = ""
+                    
+                    # Lấy số lượt xem (nếu có)
+                    try:
+                        views_element = element.find_element(By.XPATH, ".//strong[contains(@class, 'video-count')]")
+                        views = views_element.text
+                    except NoSuchElementException:
+                        views = "0"
+                    
+                    # Thêm vào danh sách kết quả
+                    videos_data.append({
+                        "video_id": video_id,
+                        "video_url": video_url,
+                        "author": author,
+                        "description": description,
+                        "views": views
+                    })
+                    
+                except Exception as e:
+                    logger.warning(f"Lỗi khi trích xuất thông tin video: {e}")
+                    continue
+            
+            return videos_data
+        
+        except Exception as e:
+            logger.error(f"Lỗi khi tìm kiếm video: {e}")
+            return []
+
+
     def navigate_to_comments(self, video_url: str) -> bool:
         """
         Điều hướng tới trang video và hiển thị phần bình luận
@@ -809,7 +1038,7 @@ class TikTokCommentCrawler:
         """
         try:
             # Truy cập trang đăng nhập TikTok
-            self.driver.get("https://www.tiktok.com/login")
+            self.driver.get("https://www.tiktok.com/login?lang=en")
             logger.info("Đã mở trang đăng nhập TikTok")
             
             # Đợi cho các phần tử tải xong

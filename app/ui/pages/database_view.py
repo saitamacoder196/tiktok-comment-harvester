@@ -1,3 +1,4 @@
+from app.data.exporter import export_to_csv
 import streamlit as st
 import pandas as pd
 import plotly.express as px
@@ -95,7 +96,7 @@ def render_database_view_page():
             st.plotly_chart(fig)
         
         # Thêm tabs để xem dữ liệu cụ thể
-        tab1, tab2 = st.tabs(["Bình luận", "Videos"])
+        tab1, tab2, tab3 = st.tabs(["Bình luận", "Videos", "Lịch sử tìm kiếm"])
         
         with tab1:
             st.subheader("Dữ liệu bình luận")
@@ -252,6 +253,105 @@ def render_database_view_page():
             else:
                 st.info("Chưa có dữ liệu video nào trong database.")
         
+        with tab3:
+            st.subheader("Lịch sử tìm kiếm")
+            
+            # Truy vấn lịch sử tìm kiếm
+            db.cursor.execute("""
+            SELECT 
+                q.query_id, 
+                q.keyword, 
+                q.results_count, 
+                q.created_at,
+                COUNT(DISTINCT sr.video_id) AS videos_count
+            FROM 
+                search_queries q
+            LEFT JOIN 
+                search_results sr ON q.query_id = sr.query_id
+            GROUP BY 
+                q.query_id, q.keyword, q.results_count, q.created_at
+            ORDER BY 
+                q.created_at DESC
+            LIMIT 50
+            """)
+            
+            # Lấy kết quả và tên cột
+            columns = [desc[0] for desc in db.cursor.description]
+            queries = [dict(zip(columns, row)) for row in db.cursor.fetchall()]
+            
+            if queries:
+                # Chuyển đổi sang DataFrame
+                queries_df = pd.DataFrame(queries)
+                
+                # Định dạng thời gian
+                if 'created_at' in queries_df.columns:
+                    queries_df['created_at'] = pd.to_datetime(queries_df['created_at'])
+                
+                # Hiển thị DataFrame
+                st.dataframe(queries_df)
+                
+                # Hiển thị thông tin chi tiết khi chọn từ khóa
+                st.subheader("Kết quả tìm kiếm")
+                selected_query_id = st.selectbox(
+                    "Chọn từ khóa để xem kết quả",
+                    options=[(q['query_id'], q['keyword']) for q in queries],
+                    format_func=lambda x: f"{x[1]} ({x[0]})"
+                )
+                
+                if selected_query_id:
+                    query_id = selected_query_id[0]
+                    
+                    # Truy vấn kết quả tìm kiếm
+                    db.cursor.execute("""
+                    SELECT 
+                        v.video_id, 
+                        v.author, 
+                        v.title,
+                        v.video_url,
+                        sr.rank,
+                        COUNT(c.comment_id) AS comments_count
+                    FROM 
+                        search_results sr
+                    JOIN 
+                        videos v ON sr.video_id = v.video_id
+                    LEFT JOIN 
+                        comments c ON v.video_id = c.video_id
+                    WHERE 
+                        sr.query_id = %s
+                    GROUP BY 
+                        v.video_id, v.author, v.title, v.video_url, sr.rank
+                    ORDER BY 
+                        sr.rank
+                    """, (query_id,))
+                    
+                    # Lấy kết quả và tên cột
+                    columns = [desc[0] for desc in db.cursor.description]
+                    results = [dict(zip(columns, row)) for row in db.cursor.fetchall()]
+                    
+                    if results:
+                        results_df = pd.DataFrame(results)
+                        st.dataframe(results_df)
+                        
+                        # Nút để xem bình luận của video được chọn
+                        selected_result_video = st.selectbox(
+                            "Chọn video để xem bình luận",
+                            options=[(r['video_id'], r['author'] or 'Unknown') for r in results],
+                            format_func=lambda x: f"{x[1]} - {x[0]}"
+                        )
+                        
+                        if selected_result_video and st.button("Xem bình luận của video này"):
+                            video_id = selected_result_video[0]
+                            st.session_state['last_comment_search'] = {
+                                'username': '',
+                                'video_id': video_id,
+                                'limit': 100
+                            }
+                            st.rerun()
+                    else:
+                        st.info("Không có kết quả nào cho từ khóa này.")
+            else:
+                st.info("Chưa có lịch sử tìm kiếm nào.")
+
         # Thêm tính năng quản lý database
         st.markdown("---")
         st.subheader("⚙️ Quản lý Database")
