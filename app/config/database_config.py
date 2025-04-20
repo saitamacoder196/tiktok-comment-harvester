@@ -22,7 +22,7 @@ def get_database_config():
     
     # Mặc định config
     default_config = {
-        "db_enabled": False,
+        "db_enabled": True,
         "db_host": env_config.get("db_host", "localhost"),
         "db_port": env_config.get("db_port", 5432),
         "db_user": env_config.get("db_user", "postgres"),

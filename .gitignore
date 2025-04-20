@@ -54,6 +54,7 @@ chromedriver*
 # Project specific
 data/raw/*
 data/processed/*
+data/avatars/*
 !data/raw/.gitkeep
 !data/processed/.gitkeep
 

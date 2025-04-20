@@ -80,8 +80,27 @@ def render_data_view_page():
             st.metric("Độ dài bình luận trung bình", f"{df_clean['comment_length'].mean():.1f} ký tự")
     
     # Xem dữ liệu thô
-    with st.expander("Xem dữ liệu thô", expanded=False):
-        st.dataframe(df)
+    with st.expander("Xem bình luận", expanded=False):
+        for i, row in df_clean.head(10).iterrows():
+            col1, col2 = st.columns([1, 5])
+            with col1:
+                if 'avatar_path' in row and row['avatar_path']:
+                    try:
+                        st.image(row['avatar_path'], width=50)
+                    except:
+                        st.image("https://via.placeholder.com/50", width=50)
+                elif 'avatar_url' in row and row['avatar_url']:
+                    st.image(row['avatar_url'], width=50)
+                else:
+                    st.image("https://via.placeholder.com/50", width=50)
+            
+            with col2:
+                st.markdown(f"**{row['username']}**")
+                st.write(row['comment_text'])
+                st.caption(f"{row['comment_time']} | {row['likes']} lượt thích")
+            
+            st.markdown("---")
+
     
     # Phân tích dữ liệu
     st.subheader("📊 Phân tích dữ liệu")

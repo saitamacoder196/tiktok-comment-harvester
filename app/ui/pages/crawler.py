@@ -1,3 +1,5 @@
+from asyncio.log import logger
+from typing import Any, Dict, List
 import streamlit as st
 import pandas as pd
 import time
@@ -25,6 +27,31 @@ def show_captcha_message():
     Hệ thống sẽ đợi tối đa 60 giây để bạn giải CAPTCHA.
     """)
 
+def filter_duplicate_comments(comments_data: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    """
+    Lọc bỏ các bình luận trùng lặp
+    
+    Args:
+        comments_data (list): Danh sách các bình luận
+        
+    Returns:
+        list: Danh sách các bình luận không trùng lặp
+    """
+    # Sử dụng set để lưu trữ các comment đã xử lý
+    processed_comments = set()
+    unique_comments = []
+    
+    for comment in comments_data:
+        # Tạo một khóa duy nhất dựa trên username và nội dung comment
+        comment_key = f"{comment.get('username', '')}:{comment.get('comment_text', '')}"
+        
+        # Nếu comment chưa tồn tại, thêm vào danh sách kết quả
+        if comment_key not in processed_comments:
+            processed_comments.add(comment_key)
+            unique_comments.append(comment)
+    
+    logger.info(f"Đã lọc bỏ {len(comments_data) - len(unique_comments)} bình luận trùng lặp")
+    return unique_comments
 
 def render_crawler_page():
     st.header("🕸️ Thu thập bình luận TikTok")
@@ -140,13 +167,31 @@ def render_crawler_page():
                 
                 # Số lượng comments tối đa
                 with col1:
-                    max_comments = st.number_input(
-                        "Số lượng bình luận tối đa", 
-                        min_value=10, 
-                        max_value=10000, 
-                        value=100, 
-                        step=10
+                    crawl_mode = st.radio(
+                        "Chế độ thu thập",
+                        options=["Giới hạn số lượng", "Không giới hạn (tự dừng khi không còn comments mới)"],
+                        index=0
                     )
+                    
+                    if crawl_mode == "Giới hạn số lượng":
+                        max_comments = st.number_input(
+                            "Số lượng bình luận tối đa", 
+                            min_value=10, 
+                            max_value=10000, 
+                            value=100, 
+                            step=10
+                        )
+                        unlimited_crawl = False
+                    else:
+                        max_idle_time = st.slider(
+                            "Thời gian chờ tối đa khi không có comments mới (giây)",
+                            min_value=10,
+                            max_value=120,
+                            value=30,
+                            step=5
+                        )
+                        unlimited_crawl = True
+                        max_comments = 10000
                 
                 # Thời gian chờ giữa các lần cuộn
                 with col2:
@@ -247,6 +292,8 @@ def render_crawler_page():
                     crawler.load_all_comments(
                         max_comments=max_comments,
                         scroll_pause_time=scroll_pause_time,
+                        unlimited=unlimited_crawl,
+                        max_idle_time=max_idle_time if unlimited_crawl else 20,
                         progress_callback=update_progress
                     )
                     
@@ -256,6 +303,8 @@ def render_crawler_page():
                         max_comments=max_comments,
                         include_replies=include_replies
                     )
+                    
+                    comments_data = filter_duplicate_comments(comments_data)
                     
                     if not comments_data:
                         st.warning("Không tìm thấy bình luận nào.")
@@ -368,6 +417,7 @@ def render_crawler_page():
                     st.rerun()
                 
         with tab2:
+            videos = None
             # Form tìm kiếm
             with st.form(key="crawler_form_search"):
                 # Từ khóa tìm kiếm
@@ -536,6 +586,7 @@ def render_crawler_page():
                                     include_replies=include_replies
                                 )
                                 
+                                comments_data = filter_duplicate_comments(comments_data)
                                 if not comments_data:
                                     video_status.warning("Không tìm thấy bình luận nào cho video này.")
                                     continue
@@ -613,7 +664,7 @@ def render_crawler_page():
                             st.dataframe(pd.DataFrame(all_comments_data).head(10))
                         else:
                             st.warning("Không thu thập được bình luận nào từ các video đã chọn.")
-            if db_enabled and videos:
+            if db_enabled and videos is not None:
                 try:
                     # Lấy kết nối database
                     db = get_db_connector(db_config)

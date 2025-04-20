@@ -203,7 +203,7 @@ class PostgresConnector:
     
     def insert_comments(self, video_id: str, comments_data: List[Dict[str, Any]]) -> bool:
         """
-        Thêm các bình luận vào database
+        Thêm các bình luận vào database, bỏ qua các bình luận đã tồn tại
         
         Args:
             video_id (str): ID của video
@@ -215,6 +215,8 @@ class PostgresConnector:
         try:
             # Ánh xạ username với comment_id để theo dõi parent_comment
             username_to_id = {}
+            inserted_count = 0
+            skipped_count = 0
             
             for comment in comments_data:
                 is_reply = comment.get('is_reply', False)
@@ -230,23 +232,48 @@ class PostgresConnector:
                 likes_text = comment.get('likes', '0')
                 try:
                     # Xử lý các chuỗi như "1.2K", "4.5M"
-                    if 'K' in likes_text:
-                        likes = int(float(likes_text.replace('K', '')) * 1000)
-                    elif 'M' in likes_text:
-                        likes = int(float(likes_text.replace('M', '')) * 1000000)
+                    if isinstance(likes_text, str):
+                        if 'K' in likes_text:
+                            likes = int(float(likes_text.replace('K', '')) * 1000)
+                        elif 'M' in likes_text:
+                            likes = int(float(likes_text.replace('M', '')) * 1000000)
+                        else:
+                            likes = int(likes_text) if likes_text.isdigit() else 0
                     else:
-                        likes = int(likes_text) if likes_text.isdigit() else 0
+                        likes = int(likes_text) if likes_text is not None else 0
                 except ValueError:
                     likes = 0
                 
                 # Chuyển đổi chuỗi replies_count sang số nguyên
-                replies_count = int(comment.get('replies_count', '0')) if comment.get('replies_count', '0').isdigit() else 0
+                replies_count_text = comment.get('replies_count', '0')
+                if isinstance(replies_count_text, str):
+                    replies_count = int(replies_count_text) if replies_count_text.isdigit() else 0
+                else:
+                    replies_count = int(replies_count_text) if replies_count_text is not None else 0
                 
-                # Thêm bình luận vào database
+                # Kiểm tra xem comment đã tồn tại chưa
+                self.cursor.execute("""
+                SELECT comment_id FROM comments 
+                WHERE video_id = %s AND username = %s AND comment_text = %s
+                """, (video_id, comment.get('username', ''), comment.get('comment_text', '')))
+                
+                existing_comment = self.cursor.fetchone()
+                
+                if existing_comment:
+                    # Comment đã tồn tại, bỏ qua
+                    skipped_count += 1
+                    
+                    # Nếu là comment gốc, vẫn lưu ID để theo dõi parent_comment cho replies
+                    if not is_reply:
+                        username_to_id[comment.get('username', '')] = existing_comment[0]
+                    
+                    continue
+                
+                # Thêm bình luận vào database với avatar
                 self.cursor.execute("""
                 INSERT INTO comments 
-                (video_id, username, comment_text, likes, comment_time, replies_count, is_reply, parent_comment_id, crawled_at)
-                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
+                (video_id, username, comment_text, likes, comment_time, replies_count, is_reply, parent_comment_id, avatar_url, avatar_path, crawled_at)
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
                 RETURNING comment_id
                 """, (
                     video_id,
@@ -257,14 +284,20 @@ class PostgresConnector:
                     replies_count,
                     is_reply,
                     parent_comment_id,
+                    comment.get('avatar_url', ''),  # URL avatar
+                    comment.get('avatar_path', ''),  # Đường dẫn local avatar
                     comment.get('crawled_at', None)
                 ))
                 
                 # Lưu comment_id với username để theo dõi parent_comment
                 comment_id = self.cursor.fetchone()[0]
                 username_to_id[comment.get('username', '')] = comment_id
+                inserted_count += 1
             
-            logger.info(f"Đã thêm {len(comments_data)} bình luận cho video: {video_id}")
+            # Commit changes
+            self.conn.commit()
+            
+            logger.info(f"Đã thêm {inserted_count} bình luận mới, bỏ qua {skipped_count} bình luận trùng lặp cho video: {video_id}")
             return True
         except Exception as e:
             logger.error(f"Lỗi khi thêm bình luận: {e}")
@@ -436,7 +469,7 @@ class PostgresConnector:
             }
             
             # Thêm thông tin video
-            self.insert_video_with_details(
+            result = self.insert_video_with_details(
                 video_id=video_data["video_id"],
                 video_url=video_data["video_url"],
                 author=video_data["author"],
@@ -451,13 +484,26 @@ class PostgresConnector:
                 tags=video_data["tags"]
             )
             
+            if not result:
+                logger.error("Lỗi khi thêm thông tin video vào database")
+                return False
+            
             # Chuyển đổi DataFrame thành list của dict
             comments_data = df.to_dict('records')
             
             # Thêm bình luận vào database
-            return self.insert_comments(video_id, comments_data)
+            success = self.insert_comments(video_id, comments_data)
+            
+            # Explicitly commit changes
+            if success:
+                self.conn.commit()
+            
+            return success
         except Exception as e:
             logger.error(f"Lỗi khi xuất DataFrame vào PostgreSQL: {e}")
+            # Rollback in case of error
+            if self.conn:
+                self.conn.rollback()
             return False
     
     def get_database_stats(self) -> Dict[str, Any]:

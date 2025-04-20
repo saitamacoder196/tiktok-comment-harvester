@@ -19,6 +19,7 @@ CREATE TABLE IF NOT EXISTS videos (
 );
 
 -- Tạo bảng comments để lưu thông tin bình luận
+-- Tạo bảng comments để lưu thông tin bình luận
 CREATE TABLE IF NOT EXISTS comments (
     comment_id SERIAL PRIMARY KEY,
     video_id VARCHAR(255) REFERENCES videos(video_id) ON DELETE CASCADE,
@@ -31,6 +32,8 @@ CREATE TABLE IF NOT EXISTS comments (
     parent_comment_id INTEGER,
     sentiment VARCHAR(20),
     hashtags TEXT[],
+    avatar_url TEXT,         -- URL avatar gốc
+    avatar_path TEXT,        -- Đường dẫn avatar đã tải xuống
     crawled_at TIMESTAMP
 );
 

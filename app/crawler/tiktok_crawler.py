@@ -563,238 +563,11 @@ class TikTokCommentCrawler:
             logger.error(f"Lỗi khi điều hướng đến bình luận: {e}")
             return False
 
-    def load_all_comments(self, max_comments: int = 100, 
-                        scroll_pause_time: float = 1.5,
-                        progress_callback = None) -> bool:
-        """
-        Cuộn trang để tải tất cả comments
-        
-        Args:
-            max_comments (int): Số lượng comments tối đa cần crawl
-            scroll_pause_time (float): Thời gian dừng giữa các lần cuộn (giây)
-            progress_callback (callable): Hàm callback để cập nhật tiến trình
-            
-        Returns:
-            bool: True nếu tải comments thành công, False nếu thất bại
-        """
-        try:
-            # Tìm phần tử comments container
-            comments_section = self.wait.until(EC.presence_of_element_located(
-                (By.XPATH, "//div[contains(@class, 'DivCommentListContainer')]")
-            ))
-            
-            # Cuộn xuống để tải thêm comments
-            comments_loaded = 0
-            last_comments_count = 0
-            attempts = 0
-            max_attempts = 20  # Số lần thử tối đa khi không có thêm comments mới
-            
-            while comments_loaded < max_comments and attempts < max_attempts:
-                # Đếm số lượng comments hiện tại
-                comments = self.driver.find_elements(By.XPATH, "//div[contains(@class, 'DivCommentItemWrapper')]")
-                comments_loaded = len(comments)
-                
-                logger.info(f"Đã tải {comments_loaded}/{max_comments} comments")
-                
-                # Cập nhật tiến trình
-                if progress_callback and callable(progress_callback):
-                    progress_percent = min(100, int((comments_loaded / max_comments) * 100))
-                    progress_callback(progress_percent, f"Đã tải {comments_loaded}/{max_comments} comments")
-                
-                if comments_loaded == last_comments_count:
-                    attempts += 1
-                else:
-                    attempts = 0
-                    
-                last_comments_count = comments_loaded
-                
-                # Cuộn đến comment cuối cùng
-                if comments_loaded > 0:
-                    last_comment = comments[-1]
-                    self.driver.execute_script("arguments[0].scrollIntoView();", last_comment)
-                    
-                # Hoặc cuộn phần tử comments container
-                self.driver.execute_script("arguments[0].scrollTop = arguments[0].scrollHeight", comments_section)
-                time.sleep(scroll_pause_time)
-                
-                # Xem thêm câu trả lời (replies) nếu có
-                try:
-                    view_more_replies = self.driver.find_elements(By.XPATH, "//div[contains(@class, 'DivViewRepliesContainer')]")
-                    for reply_button in view_more_replies[:5]:  # Chỉ mở 5 cái một lần để tránh quá tải
-                        try:
-                            self.driver.execute_script("arguments[0].click();", reply_button)
-                            time.sleep(0.5)  # Chờ một chút để replies tải
-                        except:
-                            continue
-                except:
-                    pass
-                
-                # Kiểm tra nếu đã đạt đủ số lượng comments cần thiết
-                if comments_loaded >= max_comments:
-                    logger.info(f"Đã đạt đủ số lượng comments: {comments_loaded}")
-                    break
-                
-                # Kiểm tra nếu không tải được thêm comments
-                if attempts >= max_attempts:
-                    logger.info(f"Không thể tải thêm comments sau {max_attempts} lần thử")
-                    break
-            
-            # Hoàn thành tiến trình
-            if progress_callback and callable(progress_callback):
-                progress_callback(100, f"Đã hoàn thành việc tải {comments_loaded} comments")
-                
-            return True
-        except Exception as e:
-            logger.error(f"Lỗi khi tải comments: {e}")
-            if progress_callback and callable(progress_callback):
-                progress_callback(0, f"Lỗi: {str(e)}")
-            return False
-
-        def extract_comments(self, max_comments: int = 100, include_replies: bool = True) -> List[Dict[str, Any]]:
-            """
-            Trích xuất thông tin từ các comments đã tải
-            
-            Args:
-                max_comments (int): Số lượng comments tối đa cần trích xuất
-                include_replies (bool): Có trích xuất cả replies hay không
-                
-            Returns:
-                list: Danh sách các comment đã trích xuất
-            """
-            comments_data = []
-            
-            try:
-                # Tìm tất cả các comment containers
-                comment_elements = self.driver.find_elements(By.XPATH, "//div[contains(@class, 'DivCommentItemWrapper')]")
-                
-                # Giới hạn số lượng comment cần xử lý
-                comments_to_process = min(len(comment_elements), max_comments)
-                
-                for i in range(comments_to_process):
-                    try:
-                        comment_element = comment_elements[i]
-                        
-                        # Trích xuất thông tin username
-                        try:
-                            username_element = comment_element.find_element(By.XPATH, ".//div[@data-e2e='comment-username-1']//p")
-                            username = username_element.text
-                        except NoSuchElementException:
-                            username = "Unknown"
-                        
-                        # Trích xuất nội dung comment
-                        try:
-                            comment_text_element = comment_element.find_element(By.XPATH, ".//span[@data-e2e='comment-level-1']/p")
-                            comment_text = comment_text_element.text
-                        except NoSuchElementException:
-                            comment_text = ""
-                        
-                        # Trích xuất số lượng likes
-                        try:
-                            likes_element = comment_element.find_element(By.XPATH, ".//div[contains(@class, 'DivLikeContainer')]/span")
-                            likes = likes_element.text
-                        except NoSuchElementException:
-                            likes = "0"
-                        
-                        # Trích xuất thời gian comment
-                        try:
-                            time_element = comment_element.find_element(By.XPATH, ".//div[contains(@class, 'DivCommentSubContentWrapper')]/span[1]")
-                            comment_time = time_element.text
-                        except NoSuchElementException:
-                            comment_time = "Unknown"
-                        
-                        # Kiểm tra số lượng replies
-                        try:
-                            replies_text_element = comment_element.find_element(By.XPATH, ".//div[contains(@class, 'DivViewRepliesContainer')]/span")
-                            replies_text = replies_text_element.text
-                            # Trích xuất số từ chuỗi "Xem X câu trả lời"
-                            replies_count = re.search(r'(\d+)', replies_text)
-                            replies_count = replies_count.group(1) if replies_count else "0"
-                        except NoSuchElementException:
-                            replies_count = "0"
-                        
-                        # Tạo đối tượng comment
-                        comment_data = {
-                            "username": username,
-                            "comment_text": comment_text,
-                            "likes": likes,
-                            "comment_time": comment_time,
-                            "replies_count": replies_count,
-                            "crawled_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-                        }
-                        
-                        # Thêm vào danh sách kết quả
-                        comments_data.append(comment_data)
-                        
-                        # Trích xuất replies nếu có và được yêu cầu
-                        if include_replies and int(replies_count) > 0:
-                            try:
-                                # Kiểm tra xem replies đã được mở chưa
-                                replies_container = comment_element.find_elements(By.XPATH, ".//div[contains(@class, 'DivReplyContainer')]//div[contains(@class, 'DivCommentItemWrapper')]")
-                                
-                                # Nếu chưa mở, tìm và nhấp vào nút "Xem X câu trả lời"
-                                if len(replies_container) == 0:
-                                    view_replies_button = comment_element.find_element(By.XPATH, ".//div[contains(@class, 'DivViewRepliesContainer')]")
-                                    self.driver.execute_script("arguments[0].click();", view_replies_button)
-                                    time.sleep(1)  # Đợi để replies tải
-                                    
-                                    # Tìm lại container sau khi đã mở
-                                    replies_container = comment_element.find_elements(By.XPATH, ".//div[contains(@class, 'DivReplyContainer')]//div[contains(@class, 'DivCommentItemWrapper')]")
-                                
-                                # Trích xuất thông tin từ mỗi reply
-                                for reply_element in replies_container:
-                                    try:
-                                        # Trích xuất username của reply
-                                        reply_username = reply_element.find_element(By.XPATH, ".//div[@data-e2e='comment-username-2']//p").text
-                                        
-                                        # Trích xuất nội dung reply
-                                        reply_text = reply_element.find_element(By.XPATH, ".//span[@data-e2e='comment-level-2']/p").text
-                                        
-                                        # Trích xuất số likes của reply
-                                        try:
-                                            reply_likes = reply_element.find_element(By.XPATH, ".//div[contains(@class, 'DivLikeContainer')]/span").text
-                                        except:
-                                            reply_likes = "0"
-                                        
-                                        # Trích xuất thời gian của reply
-                                        try:
-                                            reply_time = reply_element.find_element(By.XPATH, ".//div[contains(@class, 'DivCommentSubContentWrapper')]/span[1]").text
-                                        except:
-                                            reply_time = "Unknown"
-                                        
-                                        # Tạo đối tượng reply
-                                        reply_data = {
-                                            "parent_comment_username": username,
-                                            "username": reply_username,
-                                            "comment_text": reply_text,
-                                            "likes": reply_likes,
-                                            "comment_time": reply_time,
-                                            "is_reply": True,
-                                            "crawled_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-                                        }
-                                        
-                                        # Thêm vào danh sách kết quả
-                                        comments_data.append(reply_data)
-                                        
-                                    except Exception as e:
-                                        logger.warning(f"Lỗi khi trích xuất reply: {e}")
-                                        continue
-                                        
-                            except Exception as e:
-                                logger.warning(f"Lỗi khi trích xuất replies cho comment {i}: {e}")
-                        
-                    except Exception as e:
-                        logger.error(f"Lỗi khi trích xuất comment thứ {i}: {e}")
-                        continue
-                
-                logger.info(f"Đã trích xuất {len(comments_data)} comments và replies")
-                return comments_data
-                
-            except Exception as e:
-                logger.error(f"Lỗi khi trích xuất comments: {e}")
-                return comments_data
     
     def load_all_comments(self, max_comments: int = 100, 
                       scroll_pause_time: float = 1.5,
+                      unlimited: bool = False,
+                      max_idle_time: int = 20,
                       progress_callback = None) -> bool:
         """
         Cuộn trang để tải tất cả comments
@@ -802,6 +575,8 @@ class TikTokCommentCrawler:
         Args:
             max_comments (int): Số lượng comments tối đa cần crawl
             scroll_pause_time (float): Thời gian dừng giữa các lần cuộn (giây)
+            unlimited (bool): Tải không giới hạn comments cho đến khi không thể tải thêm
+            max_idle_time (int): Thời gian tối đa (giây) không thấy comments mới trước khi dừng (khi unlimited=True)
             progress_callback (callable): Hàm callback để cập nhật tiến trình
             
         Returns:
@@ -818,23 +593,34 @@ class TikTokCommentCrawler:
             last_comments_count = 0
             attempts = 0
             max_attempts = 20  # Số lần thử tối đa khi không có thêm comments mới
+            start_time = time.time()
             
-            while comments_loaded < max_comments and attempts < max_attempts:
+            while (unlimited or comments_loaded < max_comments) and attempts < max_attempts:
                 # Đếm số lượng comments hiện tại
                 comments = self.driver.find_elements(By.XPATH, "//div[contains(@class, 'DivCommentItemWrapper')]")
                 comments_loaded = len(comments)
                 
-                logger.info(f"Đã tải {comments_loaded}/{max_comments} comments")
+                logger.info(f"Đã tải {comments_loaded}{' (unlimited mode)' if unlimited else f'/{max_comments}'} comments")
                 
                 # Cập nhật tiến trình
                 if progress_callback and callable(progress_callback):
-                    progress_percent = min(100, int((comments_loaded / max_comments) * 100))
-                    progress_callback(progress_percent, f"Đã tải {comments_loaded}/{max_comments} comments")
+                    if unlimited:
+                        # Trong chế độ không giới hạn, hiển thị số lượng đã tải
+                        progress_callback(min(99, int((comments_loaded / 1000) * 100)), 
+                                        f"Đã tải {comments_loaded} comments (chế độ không giới hạn)")
+                    else:
+                        progress_percent = min(100, int((comments_loaded / max_comments) * 100))
+                        progress_callback(progress_percent, f"Đã tải {comments_loaded}/{max_comments} comments")
                 
                 if comments_loaded == last_comments_count:
                     attempts += 1
+                    # Trong chế độ không giới hạn, kiểm tra thời gian trôi qua kể từ lần cuối có comments mới
+                    if unlimited and (time.time() - start_time) > max_idle_time:
+                        logger.info(f"Dừng tải trong chế độ không giới hạn sau {max_idle_time}s không có comments mới")
+                        break
                 else:
                     attempts = 0
+                    start_time = time.time()  # Reset thời gian khi tìm thấy comment mới
                     
                 last_comments_count = comments_loaded
                 
@@ -847,20 +633,11 @@ class TikTokCommentCrawler:
                 self.driver.execute_script("arguments[0].scrollTop = arguments[0].scrollHeight", comments_section)
                 time.sleep(scroll_pause_time)
                 
-                # Xem thêm câu trả lời (replies) nếu có
-                try:
-                    view_more_replies = self.driver.find_elements(By.XPATH, "//div[contains(@class, 'DivViewRepliesContainer')]")
-                    for reply_button in view_more_replies[:5]:  # Chỉ mở 5 cái một lần để tránh quá tải
-                        try:
-                            self.driver.execute_script("arguments[0].click();", reply_button)
-                            time.sleep(0.5)  # Chờ một chút để replies tải
-                        except:
-                            continue
-                except:
-                    pass
+                # Tự động mở tất cả các view replies
+                self._open_all_replies()
                 
-                # Kiểm tra nếu đã đạt đủ số lượng comments cần thiết
-                if comments_loaded >= max_comments:
+                # Kiểm tra nếu đã đạt đủ số lượng comments cần thiết (chỉ trong chế độ có giới hạn)
+                if not unlimited and comments_loaded >= max_comments:
                     logger.info(f"Đã đạt đủ số lượng comments: {comments_loaded}")
                     break
                 
@@ -880,14 +657,112 @@ class TikTokCommentCrawler:
                 progress_callback(0, f"Lỗi: {str(e)}")
             return False
 
-    
-    def extract_comments(self, max_comments: int = 100, include_replies: bool = True) -> List[Dict[str, Any]]:
+    def _open_all_replies(self):
+        """
+        Mở tất cả các replies
+        """
+        try:
+            # Tìm tất cả các nút "Xem X câu trả lời"
+            view_replies_buttons = self.driver.find_elements(
+                By.XPATH, 
+                "//div[contains(@class, 'DivViewRepliesContainer')]"
+            )
+            
+            if view_replies_buttons:
+                logger.info(f"Tìm thấy {len(view_replies_buttons)} nút xem replies")
+                
+                # Click tất cả các nút
+                for btn in view_replies_buttons:
+                    try:
+                        # Cuộn đến nút reply
+                        self.driver.execute_script("arguments[0].scrollIntoView({block: 'center'});", btn)
+                        time.sleep(0.3)  # Đợi một chút để nút hiển thị trong view
+                        
+                        # Click vào nút
+                        self.driver.execute_script("arguments[0].click();", btn)
+                        time.sleep(0.5)  # Đợi replies tải
+                        
+                        logger.info("Đã mở một replies container")
+                    except Exception as e:
+                        logger.warning(f"Không thể click nút xem replies: {e}")
+                        continue
+                
+                # Đợi một chút để tất cả replies được tải
+                time.sleep(1)
+                
+                # Kiểm tra xem còn nút nào nữa không
+                remaining = self.driver.find_elements(
+                    By.XPATH, 
+                    "//div[contains(@class, 'DivViewRepliesContainer')]"
+                )
+                if remaining:
+                    logger.info(f"Còn {len(remaining)} nút xem replies chưa được click")
+                    
+        except Exception as e:
+            logger.warning(f"Lỗi khi mở tất cả các replies: {e}")
+
+    def download_avatars(self, comments_data: List[Dict[str, Any]]) -> None:
+        """
+        Tải xuống avatar từ URL và lưu vào thư mục local
+        
+        Args:
+            comments_data (list): Danh sách các comment
+        """
+        try:
+            # Tạo thư mục để lưu avatar
+            avatar_dir = Path("data/avatars")
+            avatar_dir.mkdir(parents=True, exist_ok=True)
+            
+            # Import các module cần thiết
+            import requests
+            from urllib.parse import urlparse
+            import hashlib
+            
+            for comment in comments_data:
+                avatar_url = comment.get('avatar_url', '')
+                if not avatar_url:
+                    continue
+                    
+                try:
+                    # Tạo tên file dựa trên username và URL
+                    username = comment.get('username', 'unknown')
+                    url_hash = hashlib.md5(avatar_url.encode()).hexdigest()
+                    avatar_filename = f"{username}_{url_hash}.jpg"
+                    avatar_path = avatar_dir / avatar_filename
+                    
+                    # Kiểm tra xem avatar đã tồn tại chưa
+                    if avatar_path.exists():
+                        comment['avatar_path'] = str(avatar_path)
+                        continue
+                    
+                    # Tải avatar
+                    response = requests.get(avatar_url, timeout=10)
+                    if response.status_code == 200:
+                        # Lưu avatar vào file
+                        with open(avatar_path, 'wb') as f:
+                            f.write(response.content)
+                        
+                        # Cập nhật đường dẫn avatar trong comment data
+                        comment['avatar_path'] = str(avatar_path)
+                        logger.info(f"Đã tải avatar cho {username}")
+                    else:
+                        logger.warning(f"Không thể tải avatar cho {username}: HTTP {response.status_code}")
+                except Exception as e:
+                    logger.warning(f"Lỗi khi tải avatar cho {comment.get('username', 'unknown')}: {e}")
+                    continue
+            
+            logger.info(f"Hoàn thành việc tải avatars cho {len(comments_data)} comments")
+        except Exception as e:
+            logger.error(f"Lỗi trong quá trình tải avatars: {e}")
+            
+    def extract_comments(self, max_comments: int = 100, include_replies: bool = True, skip_unknown: bool = True) -> List[Dict[str, Any]]:
         """
         Trích xuất thông tin từ các comments đã tải
         
         Args:
             max_comments (int): Số lượng comments tối đa cần trích xuất
             include_replies (bool): Có trích xuất cả replies hay không
+            skip_unknown (bool): Bỏ qua comments có username là Unknown
             
         Returns:
             list: Danh sách các comment đã trích xuất
@@ -911,6 +786,17 @@ class TikTokCommentCrawler:
                         username = username_element.text
                     except NoSuchElementException:
                         username = "Unknown"
+                    
+                    # Bỏ qua nếu username là Unknown và đã bật tùy chọn skip_unknown
+                    if skip_unknown and username == "Unknown":
+                        continue
+
+                    # Trích xuất avatar URL
+                    try:
+                        avatar_element = comment_element.find_element(By.XPATH, ".//span[contains(@class, 'SpanAvatarContainer')]//img")
+                        avatar_url = avatar_element.get_attribute("src")
+                    except NoSuchElementException:
+                        avatar_url = ""
                     
                     # Trích xuất nội dung comment
                     try:
@@ -950,6 +836,8 @@ class TikTokCommentCrawler:
                         "likes": likes,
                         "comment_time": comment_time,
                         "replies_count": replies_count,
+                        "avatar_url": avatar_url,  # Thêm URL avatar
+                        "avatar_path": "",  # Sẽ được cập nhật khi tải avatar
                         "crawled_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S")
                     }
                     
@@ -977,6 +865,13 @@ class TikTokCommentCrawler:
                                     # Trích xuất username của reply
                                     reply_username = reply_element.find_element(By.XPATH, ".//div[@data-e2e='comment-username-2']//p").text
                                     
+                                    # Trích xuất avatar URL của reply
+                                    try:
+                                        reply_avatar_element = reply_element.find_element(By.XPATH, ".//span[contains(@class, 'SpanAvatarContainer')]//img")
+                                        reply_avatar_url = reply_avatar_element.get_attribute("src")
+                                    except NoSuchElementException:
+                                        reply_avatar_url = ""
+                                    
                                     # Trích xuất nội dung reply
                                     reply_text = reply_element.find_element(By.XPATH, ".//span[@data-e2e='comment-level-2']/p").text
                                     
@@ -995,13 +890,17 @@ class TikTokCommentCrawler:
                                     # Tạo đối tượng reply
                                     reply_data = {
                                         "parent_comment_username": username,
+                                        "parent_comment_text": comment_text[:50] + "..." if len(comment_text) > 50 else comment_text,  # Thêm text của comment cha
                                         "username": reply_username,
                                         "comment_text": reply_text,
                                         "likes": reply_likes,
                                         "comment_time": reply_time,
+                                        "avatar_url": reply_avatar_url,
+                                        "avatar_path": "",
                                         "is_reply": True,
                                         "crawled_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S")
                                     }
+
                                     
                                     # Thêm vào danh sách kết quả
                                     comments_data.append(reply_data)
@@ -1018,8 +917,12 @@ class TikTokCommentCrawler:
                     continue
             
             logger.info(f"Đã trích xuất {len(comments_data)} comments và replies")
-            return comments_data
             
+            # Tải avatars
+            self.download_avatars(comments_data)
+            
+            return comments_data
+        
         except Exception as e:
             logger.error(f"Lỗi khi trích xuất comments: {e}")
             return comments_data
@@ -1136,7 +1039,7 @@ class TikTokCommentCrawler:
             return False
     
     def save_to_csv(self, comments_data: List[Dict[str, Any]], 
-                    output_file: Union[str, Path] = "tiktok_comments.csv") -> bool:
+                output_file: Union[str, Path] = "tiktok_comments.csv") -> bool:
         """
         Lưu dữ liệu comments vào file CSV
         
@@ -1158,10 +1061,13 @@ class TikTokCommentCrawler:
             # Tạo thư mục nếu chưa tồn tại
             output_path.parent.mkdir(parents=True, exist_ok=True)
             
+            # Xác định tất cả các fieldnames có thể có trong comments_data
+            fieldnames = ['username', 'comment_text', 'likes', 'comment_time', 
+                        'replies_count', 'is_reply', 'parent_comment_username',
+                        'avatar_url', 'avatar_path', 'crawled_at']
+            
             with open(output_path, 'w', newline='', encoding='utf-8') as csvfile:
-                fieldnames = ['username', 'comment_text', 'likes', 'comment_time', 
-                             'replies_count', 'crawled_at']
-                writer = csv.DictWriter(csvfile, fieldnames=fieldnames)
+                writer = csv.DictWriter(csvfile, fieldnames=fieldnames, extrasaction='ignore')
                 
                 writer.writeheader()
                 for comment in comments_data:
