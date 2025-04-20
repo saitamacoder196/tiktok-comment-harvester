@@ -3,6 +3,8 @@ import json
 from pathlib import Path
 import os
 import shutil
+from app.data.database import get_db_connector, setup_database
+from app.config.database_config import get_database_config, save_database_config
 
 def render_settings_page():
     """
@@ -19,7 +21,7 @@ def render_settings_page():
     config = load_config(config_file)
     
     # Tab cho các nhóm cài đặt
-    tab1, tab2, tab3 = st.tabs(["Crawler", "Giao diện", "Dữ liệu"])
+    tab1, tab2, tab3, tab4 = st.tabs(["Crawler", "Giao diện", "Dữ liệu", "Database"])
     
     with tab1:
         st.subheader("Cài đặt Crawler")
@@ -176,9 +178,142 @@ def render_settings_page():
                 except Exception as e:
                     st.error(f"Lỗi khi xóa dữ liệu: {str(e)}")
     
+    with tab4:
+        st.subheader("Cài đặt Database")
+        
+        # Lấy cấu hình database
+        db_config = get_database_config()
+        
+        # Cài đặt kết nối
+        st.markdown("#### Kết nối PostgreSQL")
+        
+        # Bật/tắt tính năng database
+        db_enabled = st.checkbox(
+            "Kích hoạt tính năng database",
+            value=db_config.get("db_enabled", False),
+            help="Bật tính năng này để lưu dữ liệu vào PostgreSQL database"
+        )
+        
+        config["db_enabled"] = db_enabled
+        
+        if db_enabled:
+            col1, col2 = st.columns(2)
+            
+            with col1:
+                # Host
+                db_host = st.text_input(
+                    "Host",
+                    value=db_config.get("db_host", "localhost"),
+                    help="Địa chỉ máy chủ PostgreSQL"
+                )
+                
+                # User
+                db_user = st.text_input(
+                    "Tên người dùng",
+                    value=db_config.get("db_user", "postgres"),
+                    help="Tên người dùng PostgreSQL"
+                )
+                
+                # Database name
+                db_name = st.text_input(
+                    "Tên database",
+                    value=db_config.get("db_name", "tiktok_data"),
+                    help="Tên database sẽ được tạo hoặc kết nối"
+                )
+            
+            with col2:
+                # Port
+                db_port = st.number_input(
+                    "Port",
+                    value=int(db_config.get("db_port", 5432)),
+                    min_value=1,
+                    max_value=65535,
+                    help="Cổng kết nối PostgreSQL"
+                )
+                
+                # Password
+                db_password = st.text_input(
+                    "Mật khẩu",
+                    value=db_config.get("db_password", ""),
+                    type="password",
+                    help="Mật khẩu PostgreSQL"
+                )
+                
+                # Auto save to DB
+                auto_save_to_db = st.checkbox(
+                    "Tự động lưu vào database",
+                    value=db_config.get("auto_save_to_db", False),
+                    help="Tự động lưu dữ liệu vào database sau khi thu thập"
+                )
+            
+            # Cập nhật cấu hình
+            config["db_host"] = db_host
+            config["db_port"] = db_port
+            config["db_user"] = db_user
+            config["db_password"] = db_password
+            config["db_name"] = db_name
+            config["auto_save_to_db"] = auto_save_to_db
+            
+            # Nút test kết nối
+            if st.button("🔌 Kiểm tra kết nối", use_container_width=False):
+                with st.spinner("Đang kiểm tra kết nối..."):
+                    # Lấy kết nối DB
+                    db = get_db_connector({
+                        "db_host": db_host,
+                        "db_port": db_port,
+                        "db_user": db_user,
+                        "db_password": db_password,
+                        "db_name": db_name
+                    })
+                    
+                    # Thử kết nối
+                    if db.connect():
+                        st.success("✅ Kết nối thành công đến PostgreSQL server!")
+                        db.close()
+                    else:
+                        st.error("❌ Không thể kết nối đến PostgreSQL server!")
+            
+            # Nút thiết lập database
+            if st.button("🛠️ Thiết lập database", use_container_width=False):
+                with st.spinner("Đang thiết lập database..."):
+                    # Thiết lập database
+                    if setup_database({
+                        "db_host": db_host,
+                        "db_port": db_port,
+                        "db_user": db_user,
+                        "db_password": db_password,
+                        "db_name": db_name
+                    }):
+                        st.success("✅ Đã thiết lập database thành công!")
+                    else:
+                        st.error("❌ Không thể thiết lập database!")
+                        
+            # Thông tin
+            st.info("""
+            **Lưu ý về PostgreSQL:**
+            - Đảm bảo PostgreSQL đã được cài đặt và đang chạy
+            - Người dùng phải có quyền tạo database và bảng
+            - Dữ liệu sẽ được lưu vào database nếu "Tự động lưu vào database" được bật
+            - Bạn có thể xuất dữ liệu vào database từ trang Data View
+            """)
+        
+        # Nếu tính năng bị tắt, hiển thị hướng dẫn cài đặt PostgreSQL
+        else:
+            st.info("""
+            ### Cài đặt PostgreSQL
+            Để sử dụng tính năng database, bạn cần cài đặt PostgreSQL:
+            
+            1. Tải và cài đặt PostgreSQL từ [postgresql.org](https://www.postgresql.org/download/)
+            2. Tạo người dùng và mật khẩu trong quá trình cài đặt
+            3. Đảm bảo dịch vụ PostgreSQL đang chạy
+            4. Bật tính năng database ở trên và nhập thông tin kết nối
+            5. Kiểm tra kết nối và thiết lập database
+            """)
+    
     # Lưu cấu hình
     if st.button("💾 Lưu cài đặt", type="primary"):
         save_config(config, config_file)
+        save_database_config(config)
         st.success("Đã lưu cài đặt thành công!")
         
     # Khôi phục cài đặt mặc định
@@ -240,5 +375,12 @@ def get_default_config():
         "language": "Tiếng Việt",
         "default_export_format": "CSV",
         "auto_clean_data": False,
-        "clean_days": 30
+        "clean_days": 30,
+        "db_enabled": False,
+        "db_host": "localhost",
+        "db_port": 5432,
+        "db_user": "postgres",
+        "db_password": "",
+        "db_name": "tiktok_data",
+        "auto_save_to_db": False
     }

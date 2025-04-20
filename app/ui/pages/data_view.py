@@ -6,8 +6,12 @@ import os
 import matplotlib.pyplot as plt
 import seaborn as sns
 import plotly.express as px
+import re
 from app.data.processor import clean_data, basic_analysis, sentiment_analysis, extract_hashtags, get_popular_hashtags
 from app.data.exporter import export_to_excel, export_to_csv, export_to_json
+from app.data.database import get_db_connector
+from app.config.database_config import get_database_config
+from app.utils.helpers import get_video_id_from_url
 
 def render_data_view_page():
     """
@@ -167,7 +171,7 @@ def render_data_view_page():
     st.markdown("---")
     st.subheader("📤 Xuất dữ liệu")
     
-    col1, col2, col3 = st.columns(3)
+    col1, col2, col3, col4 = st.columns([1, 1, 1, 1.5])
     
     with col1:
         if st.button("📄 Xuất CSV", use_container_width=True):
@@ -204,3 +208,42 @@ def render_data_view_page():
                 st.success(f"Đã xuất dữ liệu sang: {export_path}")
             else:
                 st.error("Lỗi khi xuất dữ liệu.")
+    
+    # Kiểm tra nếu tính năng database được bật
+    db_config = get_database_config()
+    if db_config["db_enabled"]:
+        with col4:
+            # Nút xuất vào PostgreSQL
+            if st.button("🐘 Xuất vào PostgreSQL", use_container_width=True):
+                # Yêu cầu URL của video
+                video_url = st.text_input(
+                    "URL video TikTok",
+                    placeholder="https://www.tiktok.com/@username/video/1234567890123456789",
+                    help="Nhập URL gốc của video mà bạn đã thu thập bình luận"
+                )
+                
+                # Xử lý xuất vào database
+                if video_url:
+                    # Trích xuất video_id
+                    video_id = get_video_id_from_url(video_url)
+                    
+                    if not video_id:
+                        st.error("URL không hợp lệ. Vui lòng nhập URL TikTok hợp lệ.")
+                        return
+                    
+                    with st.spinner("Đang xuất dữ liệu vào PostgreSQL..."):
+                        # Lấy kết nối DB
+                        db = get_db_connector(db_config)
+                        
+                        try:
+                            # Kết nối đến database
+                            if db.connect_to_database():
+                                # Xuất dữ liệu vào database
+                                if db.export_dataframe_to_postgres(df_clean, video_id, video_url):
+                                    st.success(f"Đã xuất {len(df_clean)} bình luận vào PostgreSQL database!")
+                                else:
+                                    st.error("Lỗi khi xuất dữ liệu vào database.")
+                            else:
+                                st.error("Không thể kết nối đến database.")
+                        finally:
+                            db.close()

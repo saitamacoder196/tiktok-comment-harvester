@@ -6,9 +6,11 @@ from pathlib import Path
 from datetime import datetime
 
 from app.crawler.tiktok_crawler import TikTokCommentCrawler
-from app.utils.helpers import validate_tiktok_url
+from app.utils.helpers import validate_tiktok_url, get_video_id_from_url
 from app.data.processor import basic_analysis
 from app.data.exporter import export_to_excel, export_to_csv, export_to_json
+from app.data.database import get_db_connector
+from app.config.database_config import get_database_config
 
 def render_crawler_page():
     st.header("🕸️ Thu thập bình luận TikTok")
@@ -102,6 +104,11 @@ def render_crawler_page():
         
         st.success("✅ Đã đăng nhập thành công! Bây giờ bạn có thể thu thập bình luận.")
         
+        # Kiểm tra cấu hình database
+        db_config = get_database_config()
+        db_enabled = db_config.get("db_enabled", False)
+        auto_save_to_db = db_config.get("auto_save_to_db", False)
+        
         # Form thu thập dữ liệu
         with st.form(key="crawler_form"):
             # URL video TikTok
@@ -152,6 +159,16 @@ def render_crawler_page():
                         options=["CSV", "JSON", "Excel"],
                         index=0
                     )
+                
+                # Tùy chọn database (nếu được bật)
+                if db_enabled:
+                    save_to_db = st.checkbox(
+                        "Lưu vào database PostgreSQL", 
+                        value=auto_save_to_db,
+                        help="Lưu dữ liệu thu thập vào PostgreSQL database"
+                    )
+                else:
+                    save_to_db = False
                     
             # Nút submit
             submit_button = st.form_submit_button(label="Bắt đầu thu thập")
@@ -180,7 +197,7 @@ def render_crawler_page():
             
             # Tạo tên file đầu ra
             timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-            video_id = tiktok_url.split("/")[-1]
+            video_id = get_video_id_from_url(tiktok_url)
             
             if output_format == "CSV":
                 output_file = data_dir / f"tiktok_comments_{video_id}_{timestamp}.csv"
@@ -238,6 +255,32 @@ def render_crawler_page():
                 else:  # Excel
                     df = pd.DataFrame(comments_data)
                     success = export_to_excel(df, output_file)
+                
+                # Lưu vào database nếu được yêu cầu
+                if success and db_enabled and save_to_db:
+                    update_progress(95, "Đang lưu dữ liệu vào PostgreSQL...")
+                    
+                    # Chuyển đổi thành DataFrame
+                    df = pd.DataFrame(comments_data)
+                    
+                    # Lấy kết nối database
+                    db = get_db_connector(db_config)
+                    
+                    try:
+                        # Kết nối đến database
+                        if db.connect_to_database():
+                            # Xuất DataFrame vào PostgreSQL
+                            db_success = db.export_dataframe_to_postgres(df, video_id, tiktok_url)
+                            if db_success:
+                                st.success(f"Đã lưu {len(df)} bình luận vào PostgreSQL database!")
+                            else:
+                                st.warning("Không thể lưu dữ liệu vào PostgreSQL database.")
+                        else:
+                            st.warning("Không thể kết nối đến PostgreSQL database.")
+                    except Exception as e:
+                        st.warning(f"Lỗi khi lưu dữ liệu vào database: {str(e)}")
+                    finally:
+                        db.close()
                 
                 if success:
                     update_progress(100, f"Đã hoàn thành! Thu thập được {len(comments_data)} bình luận.")

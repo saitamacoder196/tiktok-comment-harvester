@@ -1,6 +1,7 @@
 import streamlit as st
 from pathlib import Path
 import base64
+from app.config.database_config import get_database_config
 
 def render_sidebar():
     """
@@ -16,10 +17,18 @@ def render_sidebar():
     if logo_path.exists():
         st.sidebar.image(str(logo_path), width=200)
     
-    # Menu điều hướng
+    # Kiểm tra cấu hình database
+    db_config = get_database_config()
+    db_enabled = db_config.get("db_enabled", False)
+    
+    # Menu điều hướng (thêm trang Database nếu được bật)
+    menu_options = ["Home", "Crawler", "Data View", "Settings"]
+    if db_enabled:
+        menu_options.insert(3, "Database")
+    
     page = st.sidebar.radio(
         "Chọn chức năng",
-        options=["Home", "Crawler", "Data View", "Settings"],
+        options=menu_options,
         index=0,
         help="Chọn chức năng bạn muốn sử dụng"
     )
@@ -40,6 +49,18 @@ def render_sidebar():
                 
                 if selected_file != "Chọn file...":
                     st.session_state['selected_data_file'] = str(data_dir / selected_file)
+    
+    # Hiển thị thông tin database (nếu được bật)
+    if db_enabled:
+        st.sidebar.markdown("---")
+        st.sidebar.subheader("PostgreSQL Database")
+        st.sidebar.text(f"Host: {db_config.get('db_host', 'localhost')}")
+        st.sidebar.text(f"Database: {db_config.get('db_name', 'tiktok_data')}")
+        
+        # Nút nhanh để chuyển đến trang Database
+        if page != "Database" and st.sidebar.button("Xem dữ liệu PostgreSQL"):
+            st.session_state['page'] = 'Database'
+            st.rerun()
     
     st.sidebar.markdown("---")
     

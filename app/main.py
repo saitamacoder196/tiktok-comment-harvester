@@ -14,6 +14,7 @@ from app.ui.pages.home import render_home_page
 from app.ui.pages.crawler import render_crawler_page
 from app.ui.pages.data_view import render_data_view_page
 from app.ui.pages.settings import render_settings_page
+from app.ui.pages.database_view import render_database_view_page
 
 # Thiết lập cấu hình Streamlit
 st.set_page_config(
@@ -47,6 +48,8 @@ def main():
         render_crawler_page()
     elif selected_page == "Data View":
         render_data_view_page()
+    elif selected_page == "Database":
+        render_database_view_page()
     elif selected_page == "Settings":
         render_settings_page()
 
