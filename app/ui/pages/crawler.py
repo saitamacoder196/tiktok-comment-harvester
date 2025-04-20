@@ -400,6 +400,7 @@ def render_crawler_page():
                 
                 # Lấy crawler từ session state
                 crawler = st.session_state['tiktok_crawler']
+                crawler.captcha_callback = handle_captcha_detected
                 
                 if crawler is None:
                     st.error("Phiên đã hết hạn. Vui lòng đăng nhập lại.")
@@ -570,6 +571,7 @@ def render_crawler_page():
             if end_session_button:
                 # Lấy crawler từ session state
                 crawler = st.session_state['tiktok_crawler']
+                crawler.captcha_callback = handle_captcha_detected
                 
                 if crawler:
                     # Đóng trình duyệt
@@ -656,6 +658,7 @@ def render_crawler_page():
                 
                 # Lấy crawler từ session state
                 crawler = st.session_state['tiktok_crawler']
+                crawler.captcha_callback = handle_captcha_detected
                 
                 if crawler is None:
                     st.error("Phiên đã hết hạn. Vui lòng đăng nhập lại.")

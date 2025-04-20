@@ -20,12 +20,13 @@ from webdriver_manager.chrome import ChromeDriverManager
 
 from app.utils.helpers import get_video_id_from_url, validate_tiktok_url, setup_logger
 from app.crawler.selectors import COMMENT_SELECTORS
+from app.crawler.captcha_monitor import CaptchaMonitor  
 
 logger = setup_logger(__name__)
 
 class TikTokCommentCrawler:
     def __init__(self, headless: bool = False, chromedriver_path: Optional[str] = None,
-             timeout: int = 10, user_agent: Optional[str] = None):
+         timeout: int = 10, user_agent: Optional[str] = None):
         """
         Khởi tạo trình crawl comments TikTok
         
@@ -47,6 +48,7 @@ class TikTokCommentCrawler:
         # Biến để kiểm soát quá trình crawl
         self.crawl_paused = False
         self.captcha_callback = None
+
         
     def on_captcha_detected(self, captcha_element):
         """
@@ -62,6 +64,7 @@ class TikTokCommentCrawler:
         if self.captcha_callback and callable(self.captcha_callback):
             self.captcha_callback()
 
+
     def wait_for_captcha_solution(self, timeout=300):
         """
         Đợi cho đến khi captcha được giải
@@ -76,6 +79,7 @@ class TikTokCommentCrawler:
         if result:
             self.crawl_paused = False
         return result
+
         
     def _setup_driver(self, headless: bool, chromedriver_path: Optional[str], user_agent: Optional[str]):
         """Thiết lập trình duyệt Selenium"""
